@@ -1,14 +1,6 @@
-# 🏠 Dutch Housing Finder: User Manual
+# 🏠 Dutch Housing Finder
 
-This manual explains how your "Stealth Notifier" system works, how to keep it running, and how to customize it.
-
----
-
-## ⚠️ Important: Why did it stop?
-The script runs on your **local MacBook**. 
-- **If you close the lid:** The Mac goes to sleep, the internet disconnects, and the script stops.
-- **If you turn off the Mac:** The script stops.
-- **To keep it running:** Your Mac must stay **awake** and **connected to Wi-Fi**.
+This manual explains how your Stealth Notifier system works, how to keep it running, and how to customize it.
 
 ---
 
@@ -32,7 +24,7 @@ If you have closed your Mac and want to start the search again, follow these ste
 ---
 
 ## 📡 2. How the System Works
-The system is designed to be "Stealthy" so you don't get banned by websites like Pararius.
+The system is designed to be a "Stealth" tool so you don't get flagged by websites like Pararius.
 
 - **Rotation:** Instead of checking everything at once, it checks **one city**, then waits **4-7 minutes**, then checks the next city.
 - **Cities Covered:** Amsterdam, Utrecht, Eindhoven, Rotterdam, and Den Haag.
@@ -76,6 +68,6 @@ If you don't want to keep your MacBook open all night, you have two options:
 
 ## 📂 Project Structure
 - `main.py`: The brain of the system.
-- `.env`: Stores your Telegram Bot Token and Chat ID.
+- `.env`: Stores your Telegram Service Token and Chat ID.
 - `seen_listings.json`: The memory file (prevents duplicate messages).
 - `requirements.txt`: The list of software needed to run it.
