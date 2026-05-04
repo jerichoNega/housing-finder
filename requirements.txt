@@ -1,0 +1,5 @@
+playwright
+playwright-stealth
+requests
+python-dotenv
+beautifulsoup4
