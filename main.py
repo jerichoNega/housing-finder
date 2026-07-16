@@ -3,6 +3,7 @@ import json
 import os
 import random
 import time
+import urllib.parse
 import requests
 from dotenv import load_dotenv
 from playwright.async_api import async_playwright
@@ -13,163 +14,176 @@ from bs4 import BeautifulSoup
 load_dotenv()
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
-SEEN_FILE = "seen_listings.json"
+SEEN_FILE = os.path.expanduser("~/housing-finder/seen_listings.json")
 
-# Target URLs for Dutch Tech Hubs (Under €1100)
-TARGET_URLS = [
-    "https://www.pararius.com/apartments/amsterdam/0-1100",
-    "https://www.pararius.com/apartments/utrecht/0-1100",
-    "https://www.pararius.com/apartments/eindhoven/0-1100",
-    "https://www.pararius.com/apartments/rotterdam/0-1100",
-    "https://www.pararius.com/apartments/den-haag/0-1100"
+# Target URLs
+# Holland2Stay, Vesteda, and Funda are dropped: Holland2Stay and Funda serve a
+# bot-check interstitial to headless Chromium even with stealth applied, and
+# Vesteda's /en/search results load via a JS/API call that returns nothing
+# without a real browser session, so all three would only ever scrape empty.
+TARGETS = [
+    {"name": "Ad Hoc", "url": "https://www.adhocbeheer.nl/aanbod/", "type": "Antikraak"},
+    {"name": "Alvast", "url": "https://alvast.nl/aanbod/", "type": "Antikraak"},
+    {"name": "Pararius", "url": "https://www.pararius.com/apartments/eindhoven/radius-15km/0-1100", "type": "Portal"},
 ]
+
+# Ad Hoc's grid mixes residential units in with office/storage/retail space;
+# skip anything whose title flags it as non-residential.
+NON_RESIDENTIAL_KEYWORDS = [
+    "werkruimte", "kantoorruimte", "atelierruimte", "opslagruimte",
+    "bedrijfsruimte", "winkelruimte", "praktijkruimte", "garage", "parkeerplaats",
+]
+
+def is_residential(title):
+    lowered = title.lower()
+    return not any(kw in lowered for kw in NON_RESIDENTIAL_KEYWORDS)
+
+# Ad Hoc and Alvast are nationwide grids with no city-scoped URL, so listings
+# are kept only if their title/location mentions a place within roughly 15-20km
+# of Eindhoven.
+EINDHOVEN_AREA_KEYWORDS = [
+    "eindhoven", "veldhoven", "best", "son en breugel", "nuenen", "geldrop",
+    "mierlo", "waalre", "valkenswaard", "heeze", "helmond", "oirschot",
+    "sint-oedenrode", "boxtel", "deurne", "asten", "someren",
+]
+
+def is_in_eindhoven_area(text):
+    lowered = text.lower()
+    return any(kw in lowered for kw in EINDHOVEN_AREA_KEYWORDS)
 
 def load_seen_listings():
     if os.path.exists(SEEN_FILE):
         try:
             with open(SEEN_FILE, "r") as f:
                 return set(json.load(f))
-        except:
-            return set()
+        except: return set()
     return set()
 
 def save_seen_listings(seen_set):
-    with open(SEEN_FILE, "w") as f:
-        json.dump(list(seen_set), f)
+    try:
+        with open(SEEN_FILE, "w") as f:
+            json.dump(list(seen_set), f)
+    except Exception as e:
+        print(f"Error saving seen listings: {e}")
 
-def send_telegram_message(message):
+def send_telegram_message(message, listing_url=None, agent_name=None):
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
+    buttons = []
+    if listing_url: buttons.append({"text": "🔗 View Property", "url": listing_url})
+    if agent_name and agent_name not in ["Unknown Agent", "Ad Hoc", "Alvast", "Unknown", "Check Funda"]:
+        buttons.append({"text": "🔍 Search Agent", "url": f"https://www.google.com/search?q={urllib.parse.quote(agent_name + ' contact')}"})
+    
     payload = {
         "chat_id": TELEGRAM_CHAT_ID,
         "text": message,
         "parse_mode": "HTML",
-        "disable_web_page_preview": False
+        "reply_markup": json.dumps({"inline_keyboard": [buttons]}) if buttons else None
     }
-    try:
-        response = requests.post(url, json=payload)
-        if response.status_code != 200:
-            print(f"Telegram error: {response.text}")
-    except Exception as e:
-        print(f"Error sending telegram message: {e}")
+    try: 
+        resp = requests.post(url, json=payload, timeout=15)
+        if resp.status_code != 200:
+            print(f"Telegram API Error: {resp.text}")
+    except Exception as e: print(f"Telegram error: {e}")
 
-async def scrape_pararius(page, url):
-    city = url.split("/")[-2].capitalize()
-    print(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] Checking {city}...")
+async def scrape_site(browser, target):
+    site_name = target["name"]
+    print(f"[{time.strftime('%H:%M:%S')}] Checking {site_name}...")
+    
+    context = await browser.new_context(user_agent="Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36")
+    page = await context.new_page()
+    await Stealth().apply_stealth_async(page)
+    
     try:
-        # Navigate and wait for content
-        await page.goto(url, wait_until="domcontentloaded", timeout=60000)
+        await page.goto(target["url"], wait_until="domcontentloaded", timeout=90000)
+        await asyncio.sleep(random.uniform(5, 10))
         
-        # Cloudflare/Loading wait - increased to be safe
-        await asyncio.sleep(25)
-        
-        # Human-like interaction
-        await page.mouse.wheel(0, random.randint(500, 1500))
-        await asyncio.sleep(random.uniform(2, 4))
-        
+        # Check for Cloudflare or Blocks
+        title = await page.title()
+        if "Just a moment" in title:
+            print(f"  Blocked by Cloudflare on {site_name}")
+            await context.close()
+            return []
+
         content = await page.content()
         soup = BeautifulSoup(content, "html.parser")
-        
         listings = []
-        # Pararius uses <section class="listing-search-item">
-        items = soup.find_all("section", class_="listing-search-item")
+
+        if site_name == "Pararius":
+            items = soup.find_all("section", class_="listing-search-item")
+            print(f"  Found {len(items)} items on Pararius")
+            for item in items:
+                link = item.find("a", class_="listing-search-item__link--title")
+                if not link: continue
+                url = "https://www.pararius.com" + link["href"]
+                price_elem = item.find("span", class_="listing-search-item__price-main")
+                price = price_elem.get_text(strip=True) if price_elem else "N/A"
+                agent = item.find("div", class_="listing-search-item__info").get_text(strip=True) if item.find("div", class_="listing-search-item__info") else "Unknown"
+                listings.append({"id": url, "title": link.get_text(strip=True), "url": url, "price": price, "agent": agent, "site": site_name})
         
-        if not items:
-            title = await page.title()
-            if "Just a moment" in title:
-                print(f"  Blocked by Cloudflare for {city}")
-            else:
-                print(f"  No listings found in {city}. Page title: {title}")
-        
-        for item in items:
-            try:
-                # Find all links in the section
-                links = item.find_all("a", href=True)
-                
-                # The property link usually starts with /apartment-for-rent/ or /studio-for-rent/
-                prop_link = None
-                title = "Unknown Apartment"
-                
-                for l in links:
-                    href = l["href"]
-                    text = l.get_text(strip=True)
-                    if ("/apartment-for-rent/" in href or "/studio-for-rent/" in href):
-                        prop_link = "https://www.pararius.com" + href
-                        if text and len(text) > 5:
-                            title = text
-                
-                if not prop_link:
-                    continue
-                    
-                price_elem = item.find("div", class_="listing-search-item__price")
-                price = price_elem.get_text(strip=True) if price_elem else "Price not shown"
-                
-                location_elem = item.find("div", class_="listing-search-item__location")
-                location = location_elem.get_text(strip=True) if location_elem else city
-                
-                listings.append({
-                    "id": prop_link,
-                    "title": title,
-                    "url": prop_link,
-                    "price": price,
-                    "location": location
-                })
-            except Exception as e:
-                print(f"Error parsing listing: {e}")
-                
+        elif site_name == "Ad Hoc":
+            items = soup.find_all("article", class_="wpgb-card")
+            print(f"  Found {len(items)} items on Ad Hoc")
+            for item in items:
+                link = item.find("a", class_="wpgb-card-thumb-link", href=True)
+                if not link: continue
+                url = link["href"]
+                title = link.get("aria-label", "Ad Hoc listing")
+                if not is_residential(title): continue
+                if not is_in_eindhoven_area(title): continue
+                listings.append({"id": url, "title": title, "url": url, "price": "See listing", "agent": "Ad Hoc", "site": site_name})
+
+        elif site_name == "Alvast":
+            items = soup.find_all("div", class_="object")
+            print(f"  Found {len(items)} items on Alvast")
+            for item in items:
+                link = item.find_parent("a", href=True)
+                if not link: continue
+                url = "https://alvast.nl" + link["href"]
+                title_elem = item.find("div", class_="title")
+                title = title_elem.get_text(strip=True) if title_elem else "Alvast"
+                if not is_in_eindhoven_area(title): continue
+                price_elem = item.find(string=lambda s: s and "€" in s)
+                price = price_elem.strip() if price_elem else "Cheap"
+                listings.append({"id": url, "title": title, "url": url, "price": price, "agent": "Alvast", "site": site_name})
+
+        await context.close()
         return listings
     except Exception as e:
-        print(f"Scrape error: {e}")
+        print(f"Error checking {site_name}: {e}")
+        try: await context.close()
+        except: pass
         return []
 
 async def main():
     seen_listings = load_seen_listings()
-    
-    async with async_playwright() as p:
-        # Use a more realistic browser launch
-        browser = await p.chromium.launch(headless=True)
-        context = await browser.new_context(
-            user_agent="Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
-            viewport={"width": 1920, "height": 1080}
-        )
-        page = await context.new_page()
-        await Stealth().apply_stealth_async(page)
-        
-        # We will rotate through cities one by one to stay stealthy
-        city_index = 0
-        
-        while True:
-            try:
-                url = TARGET_URLS[city_index]
-                listings = await scrape_pararius(page, url)
+    target_index = 0
+    while True:
+        try:
+            async with async_playwright() as p:
+                # Use a larger browser launch
+                browser = await p.chromium.launch(headless=True)
+                target = TARGETS[target_index]
+                listings = await scrape_site(browser, target)
                 
                 new_found = False
-                for listing in listings:
-                    if listing["id"] not in seen_listings:
-                        msg = (
-                            f"🏠 <b>New Listing Found!</b>\n\n"
-                            f"📍 <b>{listing['title']}</b>\n"
-                            f"💶 {listing['price']}\n"
-                            f"📍 {listing['location']}\n\n"
-                            f"🔗 <a href='{listing['url']}'>View Property</a>"
-                        )
-                        send_telegram_message(msg)
-                        seen_listings.add(listing["id"])
+                for l in listings:
+                    if l["id"] not in seen_listings:
+                        msg = f"🚨 <b>{l['site']} ALERT</b>\n\n📍 <b>{l['title']}</b>\n💶 <b>Price:</b> {l['price']}\n👤 <b>Agent:</b> {l['agent']}\n\n⚡ <i>Check the property now!</i>"
+                        send_telegram_message(msg, l["url"], l["agent"])
+                        seen_listings.add(l["id"])
                         new_found = True
-                        print(f"Notified: {listing['title']}")
+                        print(f"  NEW: {l['title']}")
                 
-                if new_found:
-                    save_seen_listings(seen_listings)
-                
-                # Move to next city for the next check
-                city_index = (city_index + 1) % len(TARGET_URLS)
-                
-            except Exception as e:
-                print(f"Loop error: {e}")
+                if new_found: save_seen_listings(seen_listings)
+                await browser.close()
             
-            # Wait 4-7 minutes between single city checks
-            wait_time = random.randint(240, 420)
-            print(f"Waiting {wait_time // 60} minutes until checking the next city...")
-            await asyncio.sleep(wait_time)
+            target_index = (target_index + 1) % len(TARGETS)
+            wait = random.randint(180, 420)
+            print(f"Waiting {wait//60}m until next check...")
+            await asyncio.sleep(wait)
+        except Exception as e:
+            print(f"Global Loop Error: {e}")
+            await asyncio.sleep(60)
 
 if __name__ == "__main__":
     asyncio.run(main())
