@@ -1,5 +1,2 @@
-playwright
-playwright-stealth
-requests
-python-dotenv
+curl_cffi
 beautifulsoup4
