@@ -23,16 +23,8 @@ from curl_cffi import requests
 
 MAX_PRICE = int(os.getenv("MAX_PRICE", "1100"))
 
-# A listing only counts if its title/address mentions one of these places
-# (roughly 15-20 km around Eindhoven). Lower case.
-AREA = [
-    "eindhoven", "veldhoven", "best", "son en breugel", "son", "breugel", "nuenen",
-    "geldrop", "mierlo", "waalre", "aalst", "valkenswaard", "heeze", "leende",
-    "helmond", "oirschot", "sint-oedenrode", "boxtel", "deurne", "asten",
-    "someren", "meerhout", "meerveldhoven", "wintelre", "knegsel", "steensel",
-    "eersel", "vessem", "oerle", "zeelst", "gerwen", "nederwetten", "lieshout",
-    "stiphout", "brandevoort", "dierdonk",
-]
+# A listing only counts if its title/address/link says Eindhoven (the city itself, all districts).
+AREA = ["eindhoven"]
 
 # Self-contained only: a studio, or an apartment that is a single room (a studio under
 # another name) or at most this many m².
@@ -174,12 +166,12 @@ def pararius_style(site, base, url):
 
 def pararius():
     return pararius_style("Pararius", "https://www.pararius.nl",
-                          f"https://www.pararius.nl/huurwoningen/eindhoven/0-{MAX_PRICE}/straal-15")
+                          f"https://www.pararius.nl/huurwoningen/eindhoven/0-{MAX_PRICE}")
 
 
 def huurwoningen():
     return pararius_style("Huurwoningen", "https://www.huurwoningen.nl",
-                          f"https://www.huurwoningen.nl/in/eindhoven/?price=0-{MAX_PRICE}&radius=15&sort=published_at&direction=desc")
+                          f"https://www.huurwoningen.nl/in/eindhoven/?price=0-{MAX_PRICE}&sort=published_at&direction=desc")
 
 
 def wonen123():
@@ -438,7 +430,7 @@ def check_all(state, dry_run=False):
         # flooding the chat with everything that is already online.
         print(f"First run: remembered {len(new)} current studios, no alerts sent.")
         if new and not dry_run:
-            telegram("sendMessage", {"text": f"🏠 Housing finder is live: self-contained studios around Eindhoven up to €{MAX_PRICE}, from {', '.join(SITES)}. {len(new)} already online were skipped; you get every new one from now on, with the landlord's phone number."})
+            telegram("sendMessage", {"text": f"🏠 Housing finder is live: self-contained studios in Eindhoven up to €{MAX_PRICE}, from {', '.join(SITES)}. {len(new)} already online were skipped; you get every new one from now on, with the landlord's phone number."})
         return state
 
     for l in new:

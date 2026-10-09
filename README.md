@@ -1,6 +1,6 @@
 # Housing finder
 
-Watches rental sites around Eindhoven (15-20 km) for **self-contained studios up to €1100** and sends each new one to Telegram with photo, price, size and **the landlord's or agent's own phone number**.
+Watches rental sites in Eindhoven (the city only) for **self-contained studios up to €1100** and sends each new one to Telegram with photo, price, size and **the landlord's or agent's own phone number**.
 
 Runs on your Mac every 5 minutes in the background (launchd), while the Mac is awake. Not in the cloud: Pararius and Huurwoningen block GitHub's servers (Cloudflare 403), but not a home connection.
 
@@ -54,5 +54,5 @@ launchctl load ~/Library/LaunchAgents/com.jericho.housing-finder.plist    # star
 ```
 
 - **A site breaks** (6 failed checks in a row): one ⚠️ message naming the site, one ✅ when it works again.
-- **Settings:** budget is `MAX_PRICE` (env, default 1100), towns are `AREA` and the studio size cap is `SMALL_APARTMENT_M2` at the top of `main.py`.
+- **Settings:** budget is `MAX_PRICE` (env, default 1100), the place filter is `AREA` and the studio size cap is `SMALL_APARTMENT_M2` at the top of `main.py`.
 - **Mac asleep:** no checks; it catches up on wake. Keep it plugged in and awake (e.g. Amphetamine) during the search for the fastest alerts.
