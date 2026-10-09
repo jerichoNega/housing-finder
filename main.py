@@ -56,6 +56,15 @@ PORTAL_DOMAINS = ("pararius", "huurwoningen", "casco-media", "treehouse", "faceb
 # home, you need one to swap).
 NOT_RENTALS = ("ruilwoning",)
 
+# Words in a listing's own text that mean you cannot simply rent it.
+NOT_RENTAL_TEXT = ("woningruil", "ruilwoning", "om te ruilen", "te kunnen ruilen", "ruilen met",
+                   "alleen voor studenten", "uitsluitend voor studenten", "student housing only",
+                   "inschrijving bij woonbedrijf", "wooniezie")
+
+# Real studios in Eindhoven cost roughly €25-45 per m². Far below that is a swap, social housing
+# or a scam, so such a listing is only sent after its page has been read and found clean.
+SUSPICIOUS_PER_M2 = 18
+
 
 # ---------------------------------------------------------------- helpers
 
@@ -229,8 +238,13 @@ SITES = {
 def enrich(l, cache):
     """Fill in the landlord/agent's own phone number and website. Only runs for new listings that fit."""
     try:
+        s = soup(l["url"])
+        # Only the listing's own description: the sites' menus mention "woningruil" on every page.
+        body = " ".join(text(d) for d in s.select("[class*=listing-detail-description]")).lower()
+        hit = next((w for w in NOT_RENTAL_TEXT if w in body), None)
+        if hit:
+            l["blocked"] = f"listing text says '{hit}'"
         if l["site"] == "Pararius":
-            s = soup(l["url"])
             box = s.select_one(".contact-agent-block") or s
             name = box.select_one("a[href*='/makelaars/']")
             if name:
@@ -258,7 +272,9 @@ def enrich(l, cache):
                 cache[key] = nums[0] if nums else ""
             l["phone"] = cache[key]
     except Exception as e:
-        print(f"  could not get contact for {l['url']}: {e}")
+        print(f"  could not read {l['url']}: {e}")
+        if l["price"] and l["size"] and l["price"] / l["size"] < SUSPICIOUS_PER_M2:
+            l["blocked"] = "suspiciously cheap and the page could not be checked"
     if not l["agent"] and l["agent_site"]:
         l["agent"] = l["agent_site"]
     return l
@@ -435,6 +451,9 @@ def check_all(state, dry_run=False):
 
     for l in new:
         enrich(l, state["contacts"])
+        if l.get("blocked"):
+            print(f"  skip {l['site']}: {l['title']} €{l['price']} ({l['blocked']})")
+            continue
         print(f"  NEW  {l['site']}: {l['title']} €{l['price']} | {l['agent']} {l['phone']}")
         if not dry_run:
             notify(l)
@@ -455,6 +474,7 @@ def main():
             reason = why_not(l)
             if not reason:
                 enrich(l, cache)
+                reason = l.get("blocked", "")
             print(("FIT  " if not reason else f"skip [{reason}] ") + f"{l['title']} €{l['price']} {l['size']}m² | {l['agent']} {l['phone']} {l['agent_site']}")
         return
 
