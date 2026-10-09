@@ -2,7 +2,7 @@
 
 Watches rental sites around Eindhoven (15-20 km) for **self-contained studios up to €1100** and sends each new one to Telegram with photo, price, size and **the landlord's or agent's own phone number**.
 
-Runs on GitHub Actions every 5 to 15 minutes, so your Mac can be off.
+Runs on your Mac every 5 minutes in the background (launchd), while the Mac is awake. Not in the cloud: Pararius and Huurwoningen block GitHub's servers (Cloudflare 403), but not a home connection.
 
 ## What counts
 
@@ -29,25 +29,30 @@ Left out on purpose: Kamernet and Huurstunt (pay to react, private landlords, mo
 
 ## Setup (once)
 
-1. Make a bot with [@BotFather](https://t.me/BotFather) and copy its token. Send your bot any message, then open `https://api.telegram.org/bot<TOKEN>/getUpdates` and copy `chat.id`.
-2. Add both as repo secrets:
-   ```bash
-   gh secret set TELEGRAM_TOKEN
-   gh secret set TELEGRAM_CHAT_ID
+1. Telegram bot: [@BotFather](https://t.me/BotFather) gives the token. Send the bot a message, then `https://api.telegram.org/bot<TOKEN>/getUpdates` shows your `chat.id`.
+2. Put both in `.env` next to `main.py`:
    ```
-3. Actions tab, workflow **check**, **Run workflow**. The first run remembers what is online now and sends one "live" message. After that you only get new listings.
+   TELEGRAM_TOKEN=...
+   TELEGRAM_CHAT_ID=...
+   ```
+3. Install and start:
+   ```bash
+   python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
+   launchctl load ~/Library/LaunchAgents/com.jericho.housing-finder.plist
+   ```
+   The plist runs `.venv/bin/python main.py --once` every 300 s and logs to `logs/finder.log`.
 
-## How it behaves
+The first run remembers what is online now and sends one "live" message. After that you only get new studios.
 
-- **First run / lost memory:** listings already online are remembered silently, no flood.
-- **A site breaks** (6 failed checks in a row): you get one ⚠️ message naming the site, and one ✅ when it works again.
-- **Settings:** budget is `MAX_PRICE` (env, default 1100); the towns are the `AREA` list at the top of `main.py`.
-
-## Run locally
+## Day to day
 
 ```bash
-python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
-.venv/bin/python main.py --site Pararius          # see what one site returns
-.venv/bin/python main.py --once --dry-run         # full check, sends nothing
-TELEGRAM_TOKEN=... TELEGRAM_CHAT_ID=... .venv/bin/python main.py   # loop every 5-10 min
+tail -f logs/finder.log                                                  # what it is doing
+launchctl unload ~/Library/LaunchAgents/com.jericho.housing-finder.plist  # stop
+launchctl load ~/Library/LaunchAgents/com.jericho.housing-finder.plist    # start
+.venv/bin/python main.py --site Pararius                                  # what one site returns, and why things are skipped
 ```
+
+- **A site breaks** (6 failed checks in a row): one ⚠️ message naming the site, one ✅ when it works again.
+- **Settings:** budget is `MAX_PRICE` (env, default 1100), towns are `AREA` and the studio size cap is `SMALL_APARTMENT_M2` at the top of `main.py`.
+- **Mac asleep:** no checks; it catches up on wake. Keep it plugged in and awake (e.g. Amphetamine) during the search for the fastest alerts.

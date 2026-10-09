@@ -1,8 +1,8 @@
 """Dutch housing finder: new self-contained studios around Eindhoven, straight to Telegram with the
 landlord's own phone number.
 
-Run once (GitHub Actions, cron):  python main.py --once
-Run forever (local):              python main.py
+Run once (launchd every 5 min):   python main.py --once
+Run forever (terminal):           python main.py
 Test without sending anything:    python main.py --once --dry-run
 """
 import argparse
@@ -39,6 +39,13 @@ AREA = [
 SMALL_APARTMENT_M2 = 40
 
 ROOT = Path(__file__).resolve().parent
+
+# Local secrets: .env next to this file with TELEGRAM_TOKEN=... and TELEGRAM_CHAT_ID=...
+if (ROOT / ".env").exists():
+    for line in (ROOT / ".env").read_text().splitlines():
+        k, _, v = line.partition("=")
+        if k.strip() and not k.startswith("#") and v.strip():
+            os.environ.setdefault(k.strip(), v.strip().strip('"').strip("'"))
 STATE_FILE = Path(os.getenv("STATE_FILE", ROOT / "state.json"))
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN", "").strip()
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "").strip()
