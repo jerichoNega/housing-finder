@@ -401,7 +401,7 @@ def login():
             args=["--disable-blink-features=AutomationControlled"], ignore_default_args=["--enable-automation"])
         for i, (site, url) in enumerate(LOGIN_URLS.items()):  # reuse the blank start tab, so closing the tabs ends it
             (ctx.pages[0] if i == 0 and ctx.pages else ctx.new_page()).goto(url)
-        print("Log in on every tab (use e-mail + password, not 'Continue with Google').")
+        print("Log in on every tab (Google login is fine).")
         print("Close the Chrome window when done.")
         import main as m
         m.restore_session_cookies(ctx)

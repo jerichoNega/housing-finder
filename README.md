@@ -87,7 +87,7 @@ launchctl load ~/Library/LaunchAgents/com.jericho.housing-finder.plist    # star
 | `live` | Fills in, sends, screenshots the confirmation to Telegram |
 | `off` | Alerts only |
 
-- **Sites:** Pararius and Funda (free account each; log in once with `.venv/bin/python main.py --login`, using email + password). 123Wonen and HouseHunting show an "I'm not a robot" CAPTCHA, which the bot never solves: alert only. Huurwoningen (paid account), Vesteda and ikwilhuren (own flows): alert only.
+- **Sites:** Pararius and Funda (free account each; log in once with `.venv/bin/python main.py --login`; the login is kept across restarts). 123Wonen and HouseHunting show an "I'm not a robot" CAPTCHA, which the bot never solves: alert only. Huurwoningen (paid account), Vesteda and ikwilhuren (own flows): alert only.
 - **Never:** twice on the same listing, more than `DAILY_CAP` (20) per day, on a listing with a 🚩 scam sign, when your income is below the listing's stated requirement, on 🕒 late listings, or anything that asks for payment.
 - Every reaction is logged in `applications.json` and screenshotted in `logs/screens/`.
 - Try one listing without sending: `.venv/bin/python main.py --rehearse <listing url>`.
