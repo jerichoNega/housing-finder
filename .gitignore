@@ -4,3 +4,7 @@ seen_listings.json
 __pycache__/
 .venv/
 logs/
+.browser-profile/
+profile.json
+applications.json
+PAUSED

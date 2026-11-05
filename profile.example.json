@@ -1,0 +1,23 @@
+{
+  "first_name": "TODO",
+  "last_name": "TODO",
+  "initials": "TODO J.",
+  "email": "TODO you@example.com",
+  "phone": "TODO 06 1234 5678",
+  "street": "TODO current street",
+  "house_number": "TODO 1",
+  "postcode": "TODO 5611 AA",
+  "city": "TODO Eindhoven",
+  "birth_date": "TODO 01-01-2000",
+  "job": "TODO Marketing specialist",
+  "employer": "TODO Company B.V.",
+  "income_gross_month": 0,
+  "household": 1,
+  "move_in": "TODO 1 december",
+  "move_in_en": "TODO 1 December",
+  "lang": "nl",
+  "about_nl": "TODO 27 jaar, fulltime werkzaam in Eindhoven, vast contract, niet-roker, geen huisdieren",
+  "about_en": "TODO 27, full-time job in Eindhoven, permanent contract, non-smoker, no pets",
+  "pitch_nl": "TODO Ik ben [naam], 27 jaar en werk fulltime als ... bij ... in Eindhoven (vast contract, bruto €... per maand). Ik ben rustig, niet-roker, heb geen huisdieren en zoek een woning voor de lange termijn.",
+  "pitch_en": "TODO I am [name], 27, working full-time as ... at ... in Eindhoven (permanent contract, gross €... per month). I am quiet, a non-smoker, have no pets and I am looking for a long-term home."
+}
