@@ -12,6 +12,7 @@ import json
 import os
 import random
 import re
+import subprocess
 import sys
 import time
 import urllib.parse
@@ -190,15 +191,33 @@ def browser_get(url):
         page.close()
 
 
+def _real_chrome_ua():
+    try:
+        out = subprocess.run(["/Applications/Google Chrome.app/Contents/MacOS/Google Chrome", "--version"],
+                             capture_output=True, text=True, timeout=10).stdout
+        major = re.search(r"(\d+)\.", out).group(1)
+        return (f"Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
+                f"(KHTML, like Gecko) Chrome/{major}.0.0.0 Safari/537.36")
+    except Exception:
+        return None
+
+
 def browser_context():
     global _browser
     from playwright.sync_api import sync_playwright
     if _browser is None:
         pw = sync_playwright().start()
+        # Headless by default so Chrome never pops up or steals focus while you work. HEADLESS=0 shows it again.
+        headless = os.environ.get("HEADLESS", "1") != "0"
+        args = ["--disable-blink-features=AutomationControlled", "--window-size=1280,900"]
+        ua = _real_chrome_ua()
+        if headless and ua:
+            args.append(f"--user-agent={ua}")  # headless says "HeadlessChrome" in its UA; sites block that
+        if not headless:
+            args.append("--window-position=-3000,-3000")
         ctx = pw.chromium.launch_persistent_context(
-            str(ROOT / ".browser-profile"), channel="chrome", headless=False, locale="nl-NL",
-            args=["--disable-blink-features=AutomationControlled", "--window-position=-3000,-3000",
-                  "--window-size=900,700"],
+            str(ROOT / ".browser-profile"), channel="chrome", headless=headless, locale="nl-NL",
+            viewport={"width": 1280, "height": 900}, args=args,
             ignore_default_args=["--enable-automation"])
         restore_session_cookies(ctx)
         _browser = (pw, ctx)
@@ -737,19 +756,8 @@ def street_of(l):
 
 def reactions(l, p):
     """Short reactions (Telegram copy buttons allow 256 characters) in Dutch and English."""
-    street = street_of(l)
-    name = f"{p['first_name']} {p['last_name']}"
-    nl = (f"Hallo, ik heb interesse in de woning aan de {street} (€{l['price']}). "
-          f"Ik ben {name}, {p['about_nl']}. Beschikbaar {p['move_in']}. "
-          f"Kan ik komen bezichtigen? Tel. {p['phone']}. Groet, {p['first_name']}")
-    en = (f"Hello, I'm interested in the home at {street} (€{l['price']}). "
-          f"I'm {name}, {p['about_en']}. Available {p['move_in_en']}. "
-          f"When could I come for a viewing? Phone {p['phone']}. Best, {p['first_name']}")
-    if len(nl) > 256:  # long street name: drop the "about" part so the phone number always fits
-        nl = nl.replace(f", {p['about_nl']}", "")
-    if len(en) > 256:
-        en = en.replace(f", {p['about_en']}", "")
-    return nl[:256], en[:256]
+    import writer
+    return writer.short(l, p), writer.short(l, p, en=True)
 
 
 # ---------------------------------------------------------------- telegram
@@ -779,7 +787,7 @@ def telegram(method, payload):
     return False
 
 
-def telegram_photo(path, caption):
+def telegram_photo(path, caption, markup=None):
     """Send a local screenshot."""
     if not TELEGRAM_TOKEN or not TELEGRAM_CHAT_ID:
         print(f"  (no Telegram config) photo {path}: {caption}")
@@ -791,13 +799,15 @@ def telegram_photo(path, caption):
         mp.addpart(name="caption", data=caption[:1000])
         mp.addpart(name="parse_mode", data="HTML")
         mp.addpart(name="photo", local_path=str(path), filename=Path(path).name, content_type="image/png")
+        if markup:
+            mp.addpart(name="reply_markup", data=json.dumps(markup))
         r = requests.post(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendPhoto", multipart=mp, timeout=40)
         mp.close()
         if r.status_code != 200:
             raise RuntimeError(r.text[:200])
     except Exception as e:
         print(f"  Telegram photo error: {e}")
-        telegram("sendMessage", {"text": caption})
+        telegram("sendMessage", {"text": caption, **({"reply_markup": markup} if markup else {})})
 
 
 def telegram_text(t):
@@ -981,6 +991,9 @@ def check_all(state, dry_run=False):
                 result = apply.apply(l, profile, telegram_photo, telegram_text)
                 print(f"       auto-apply: {result}")
             time.sleep(1)
+    if not dry_run and not first_run:
+        import apply
+        apply.watch_logins(state, telegram_text, esc)
     return state
 
 

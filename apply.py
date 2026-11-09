@@ -61,7 +61,7 @@ def app_id(url):
     return hashlib.sha1(url.encode()).hexdigest()[:10]
 
 
-def record(l, status, note=""):
+def record(l, status, note="", **extra):
     with apps_locked() as apps:
         a = apps.setdefault(app_id(l["url"]), {
             "url": l["url"], "title": l["title"], "price": l["price"], "site": l["site"],
@@ -69,6 +69,7 @@ def record(l, status, note=""):
         a["status"] = status
         a["updated"] = time.time()
         a["history"].append([time.strftime("%Y-%m-%d %H:%M"), status, note])
+        a.update(extra)
 
 
 def already(url):
@@ -84,23 +85,7 @@ def sent_today():
                    if any(h[0].startswith(day) and h[1] == "applied" for h in a.get("history", [])))
 
 
-# ---------------------------------------------------------------- the message
-
-def message(l, p):
-    """The longer reaction for a form (no 256-character limit there)."""
-    street = re.sub(r"^(studio|appartement|woning|flat|apartment)\s+", "", l["title"], flags=re.I)
-    if p.get("lang", "nl") == "en":
-        return (f"Dear Sir/Madam,\n\nI am very interested in the home at {street} (€{l['price']} per month) "
-                f"and would love to come for a viewing.\n\n{p['pitch_en']}\n\n"
-                f"I can move in {p['move_in_en']}. My documents (ID, employer statement, payslips) are "
-                f"ready and I can send them right away.\n\nYou can reach me on {p['phone']}.\n\n"
-                f"Kind regards,\n{p['first_name']} {p['last_name']}")
-    return (f"Beste heer/mevrouw,\n\nIk heb grote interesse in de woning aan de {street} (€{l['price']} per maand) "
-            f"en kom graag bezichtigen.\n\n{p['pitch_nl']}\n\n"
-            f"Ik kan {p['move_in']} huren. Mijn documenten (ID, werkgeversverklaring, loonstroken) liggen "
-            f"klaar en kan ik direct sturen.\n\nU kunt mij bereiken op {p['phone']}.\n\n"
-            f"Met vriendelijke groet,\n{p['first_name']} {p['last_name']}")
-
+# ---------------------------------------------------------------- the message (writer.py)
 
 # Form field label/name/placeholder -> profile value
 FIELD_MAP = [
@@ -163,6 +148,10 @@ def _fill_form(page, l, p, msg):
             continue
         lab = _label(page, el)
         if typ == "checkbox":
+            if re.search(r"cent|probeer|proef|trial|pararius\+|abonnement|subscri|€|betaal|premium", lab):
+                if el.is_checked():
+                    el.uncheck()  # never start a paid plan or trial
+                continue
             if re.search(r"privacy|voorwaarden|akkoord|agree|terms|toestemming|consent|gelezen", lab) \
                     and not re.search(r"nieuwsbrief|newsletter|marketing|aanbiedingen", lab):
                 el.check()
@@ -177,6 +166,10 @@ def _fill_form(page, l, p, msg):
         key = next((k for rx, k in FIELD_MAP if re.search(rx, lab)), None)
         if key and typ != "select":
             v = value_for(key, l, p)
+            if v and typ == "date" and re.fullmatch(r"\d{2}-\d{2}-\d{4}", v):
+                v = "-".join(reversed(v.split("-")))  # a date input only takes YYYY-MM-DD
+            elif v and typ == "date" and not re.fullmatch(r"\d{4}-\d{2}-\d{2}", v):
+                v = time.strftime("%Y-%m-%d")  # "per direct" in a date field (move-in date): today
             if v:
                 el.fill(v)
                 filled.append(key)
@@ -345,7 +338,8 @@ def apply(l, profile, telegram_photo, telegram_text):
     if MODE == "live" and sent_today() >= DAILY_CAP:
         return f"not auto-applied (daily cap {DAILY_CAP} reached)"
 
-    msg = message(l, profile)
+    import writer
+    msg, variant, extra = writer.compose(l, profile)
     page = _ctx().new_page()
     try:
         _open_form(page, l)
@@ -369,15 +363,15 @@ def apply(l, profile, telegram_photo, telegram_text):
             path = _shot(page, l, "rehearsal")
             record(l, "rehearsed", ", ".join(filled))
             telegram_photo(path, f"🧪 <b>Rehearsal, nothing sent</b>: {l['site']} form filled ({', '.join(filled)}). "
-                                 f"If this looks right, set <code>AUTO_APPLY=live</code> in .env.")
+                                 + ("Nothing was sent." if os.getenv("AUTO_APPLY", "").lower() == "live" else
+                                  "If this looks right, set <code>AUTO_APPLY=live</code> in .env."))
             return "rehearsed"
         ok = _submit(page)
         if _captcha_challenge(page):
             raise RuntimeError("the site showed a CAPTCHA after sending")
         path = _shot(page, l, "sent")
-        record(l, "applied", "confirmed" if ok else "sent, no confirmation text")
-        telegram_photo(path, f"✅ <b>Applied</b> on {l['site']}: {l['title']} €{l['price']}"
-                             + ("" if ok else " (sent, but the site showed no clear confirmation; check your mail)"))
+        record(l, "applied", "confirmed" if ok else "sent, no confirmation text", variant=variant, message=msg, **extra)
+        telegram_photo(path, _applied_caption(l, ok, extra), _outcome_buttons(l))
         return "applied"
     except Exception as e:
         try:
@@ -390,6 +384,106 @@ def apply(l, profile, telegram_photo, telegram_text):
         return f"failed: {e}"
     finally:
         page.close()
+
+
+# ---------------------------------------------------------------- login watch
+
+LOGIN_CHECK_MIN = int(os.getenv("LOGIN_CHECK_MIN", "30"))
+LOGIN_REMIND_H = 6
+
+
+def logged_in(site, urls):
+    """Open the reaction form of a recent listing, the same way a real reaction does. True = logged in,
+    False = the site wants a login, None = could not tell (no live listing, site down). Doing this every
+    half hour also keeps the site session warm, so it does not time out between new listings."""
+    page = _ctx().new_page()
+    try:
+        for url in urls[:4]:
+            try:
+                _open_form(page, {"site": site, "url": url})
+            except Exception:
+                continue  # rented already or no contact link: try the next one
+            if _needs_login(page) and _auto_login(page, site):
+                return True
+            return not _needs_login(page)
+        return None
+    finally:
+        page.close()
+
+
+def waiting_for_login(site):
+    with apps_locked() as apps:
+        return sorted((a for a in apps.values() if a["site"] == site and a["status"] == "needs_login"),
+                      key=lambda a: -a["updated"])
+
+
+def watch_logins(state, telegram_text, esc):
+    """Check every LOGIN_CHECK_MIN minutes that the bot is still logged in on each auto-apply site.
+    Logged out: one Telegram message straight away, a reminder every LOGIN_REMIND_H hours.
+    Back in: one message, with the listings that were missed while it was out."""
+    if MODE != "live":
+        return
+    now = time.time()
+    watch = state.setdefault("login", {})
+    for site in APPLY_SITES:
+        w = watch.setdefault(site, {"ok": None, "checked": 0, "alerted": 0})
+        if now - w["checked"] < LOGIN_CHECK_MIN * 60 or now < state["cooldown"].get(site, 0):
+            continue
+        urls = [u for u in reversed(state["seen"]) if site.lower() in u][:4]
+        if not urls:
+            continue
+        try:
+            ok = logged_in(site, urls)
+        except Exception as e:
+            print(f"  login check {site}: {e}")
+            continue
+        w["checked"] = now
+        if ok is None:
+            continue
+        print(f"[{time.strftime('%H:%M:%S')}] {site} login: {'ok' if ok else 'LOGGED OUT'}")
+        if ok:
+            if w["ok"] is False:
+                missed = waiting_for_login(site)
+                lines = [f"✅ Logged in on <b>{site}</b> again, auto-apply works."]
+                if missed:
+                    lines.append(f"Missed while logged out ({len(missed)}), react by hand if still open:")
+                    lines += [f"• <a href=\"{a['url']}\">{esc(a['title'])}</a> €{a['price']}" for a in missed[:10]]
+                telegram_text("\n".join(lines))
+            w["ok"], w["alerted"] = True, 0
+            continue
+        if w["ok"] is not False or now - w["alerted"] >= LOGIN_REMIND_H * 3600:
+            missed = waiting_for_login(site)
+            telegram_text(
+                f"🔑 <b>Logged out of {site}</b>: auto-apply is not reacting there"
+                + (" (still)" if w["ok"] is False else "") + ".\n"
+                f"Fix: on the Mac run <code>cd ~/code/housing-finder && .venv/bin/python main.py --login</code> and log in."
+                + (f"\n{len(missed)} listing(s) waiting: " + ", ".join(
+                    f"<a href=\"{a['url']}\">{esc(a['title'])}</a>" for a in missed[:5]) if missed else ""))
+            w["alerted"] = now
+        w["ok"] = False
+
+
+def _applied_caption(l, ok, extra):
+    """What to do next, as a person would tell you: call while your message is on top of their pile."""
+    street = re.sub(r"^(studio|appartement|woning|flat|apartment)\s+", "", l["title"], flags=re.I)
+    lines = [f"✅ <b>Applied</b> on {l['site']}: {l['title']} €{l['price']}"
+             + ("" if ok else " (sent, but no clear confirmation; check your mail)")]
+    if l.get("phone"):
+        lines.append(f"📞 <b>Call now</b> if you can ({l.get('agent', 'the agent')}, {l['phone']}). Say: "
+                     f"<i>\"Goedendag, u spreekt met Jericho Degu. Ik heb net gereageerd op de woning aan de {street}. "
+                     f"Is die nog beschikbaar, en kan ik komen kijken?\"</i>")
+    if extra.get("call_due"):
+        lines.append(f"The message says you will call tomorrow morning. I will remind you at "
+                     f"{time.strftime('%a %H:%M', time.localtime(extra['call_due']))}.")
+    lines.append("When they answer, tap a button below. That is how the wording learns.")
+    return "\n".join(lines)
+
+
+def _outcome_buttons(l):
+    aid = app_id(l["url"])
+    return {"inline_keyboard": [[{"text": "Open listing", "url": l["url"]}],
+                                [{"text": "📅 Viewing invite", "callback_data": f"st:{aid}:viewing"},
+                                 {"text": "❌ Rejected", "callback_data": f"st:{aid}:no"}]]}
 
 
 def login():

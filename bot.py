@@ -11,8 +11,8 @@ import time
 
 from curl_cffi import requests
 
+import main  # first: it loads .env, which apply reads AUTO_APPLY from
 import apply
-import main
 
 API = f"https://api.telegram.org/bot{main.TELEGRAM_TOKEN}"
 REMIND_AFTER_H = 48
@@ -57,6 +57,10 @@ def status_text():
         for a in apps.values():
             counts[a["status"]] = counts.get(a["status"], 0) + 1
     lines.append(f"\nAuto-apply: <b>{apply.MODE}</b>, {apply.sent_today()}/{apply.DAILY_CAP} sent today")
+    for site, w in st.get("login", {}).items():
+        when = time.strftime("%H:%M", time.localtime(w["checked"])) if w.get("checked") else "never"
+        state = {True: "🔓 logged in", False: "🔑 LOGGED OUT, run main.py --login"}.get(w.get("ok"), "unknown")
+        lines.append(f"• {site}: {state} (checked {when})")
     lines.append("Tracked: " + (", ".join(f"{LABEL.get(k, k)} {v}" for k, v in counts.items()) or "nothing yet")
                  + f" ({len(today)} touched today)")
     return "\n".join(lines)
@@ -109,8 +113,11 @@ def on_message(m):
     elif t.startswith("/resume"):
         main.PAUSE_FILE.unlink(missing_ok=True)
         say("▶️ Running again.")
+    elif t.startswith("/learn"):
+        import writer
+        say(writer.stats_text(html=True))
     elif t.startswith("/start") or t.startswith("/help"):
-        say("/status · /apps · /pause · /resume")
+        say("/status · /apps · /learn · /pause · /resume")
 
 
 def reminders():
@@ -123,6 +130,17 @@ def reminders():
                     and now - a["updated"] > REMIND_AFTER_H * 3600:
                 a["reminded"] = now
                 due.append(a)
+    calls = []
+    with apply.apps_locked() as apps:
+        for a in apps.values():
+            if a.get("call_due") and now >= a["call_due"] and not a.get("call_reminded") and a["status"] == "applied":
+                a["call_reminded"] = now
+                calls.append(a)
+    for a in calls:
+        who = f"{main.esc(a.get('agent') or 'the agent')} on <b>{main.pretty_phone(a['phone'])}</b>" if a.get("phone") else "the agent (no number found, send a short follow-up via the listing)"
+        say(f"📞 Your message to <a href=\"{a['url']}\">{main.esc(a['title'])}</a> said you would call this morning. "
+            f"Call {who} now. Say: <i>\"Goedemorgen, u spreekt met Jericho Degu. Ik heb gisteren gereageerd op "
+            f"de woning aan de {main.esc(main.street_of(a))}. Ik wilde even horen of ik kan komen kijken.\"</i>")
     for a in due:
         phone = f"Call {main.pretty_phone(a['phone'])} ({main.esc(a.get('agent', ''))})" if a.get("phone") else "Send a short follow-up via the listing"
         say(f"⏰ No answer in 48 h on <a href=\"{a['url']}\">{main.esc(a['title'])}</a>. {phone}: ask if it is still available and if you can view it.")
@@ -131,6 +149,7 @@ def reminders():
 def run():
     call("setMyCommands", commands=[{"command": "status", "description": "sites and today's numbers"},
                                     {"command": "apps", "description": "open reactions and viewings"},
+                                    {"command": "learn", "description": "which message wording gets viewings"},
                                     {"command": "pause", "description": "stop checking"},
                                     {"command": "resume", "description": "start checking again"}])
     offset = None
